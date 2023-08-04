@@ -1,0 +1,599 @@
+from kafka.admin import KafkaAdminClient, ACLPermissionType, ResourcePattern, ResourceType, ACL, ACLOperation, ACLFilter, NewTopic, ConfigResource, ConfigResourceType,ResourcePatternFilter, ACLResourcePatternType, NewPartitions
+from kafka import KafkaProducer, KafkaConsumer
+from termcolor import colored, cprint
+from time import sleep
+from json import JSONDecodeError, dumps, loads
+from tabulate import tabulate
+from kafka.errors import TopicAlreadyExistsError, CommitFailedError, InvalidPartitionsError, KafkaTimeoutError
+from confluent_kafka import Producer, Consumer, KafkaException
+import fire
+import yaml
+import subprocess
+import logging
+import sys
+import signal
+import multiprocessing
+
+import logging
+logger = logging.getLogger("kafka")
+logger.addHandler(logging.StreamHandler(sys.stdout))
+logger.setLevel(logging.CRITICAL)
+
+def print_msg(msg, color='grey'):
+ text = colored(msg, color, attrs=[])
+ print("{data}".format(data=text))
+
+class ConnectBroker(object):
+ conf = {}
+ def __init__(self, conf):
+
+ if not conf.get('broker').get('server'):
+ raise Exception('Broker address is missing')
+ else:
+ self.conf['bootstrap_servers'] = conf.get('broker').get('server')
+
+ if conf.get('broker').get('username'):
+ self.conf['sasl_plain_username'] = conf.get('broker').get('username')
+
+ if conf.get('broker').get('password'):
+ self.conf['sasl_plain_password'] = conf.get('broker').get('password')
+
+ if conf.get('broker').get('sasl_mechanism'):
+ self.conf['sasl_mechanism'] = conf.get('broker').get('sasl_mechanism')
+ 
+ if conf.get('broker').get('security_protocol'):
+ self.conf['security_protocol'] = conf.get('broker').get('security_protocol')
+ 
+ # if conf.get('broker').get('sasl_mechanism'):
+ # self.conf['sasl_mechanism'] = conf.get('broker').get('sasl_mechanism')
+ 
+ if conf.get('broker').get('cert').get('ca'):
+ self.conf['ssl_cafile'] = conf.get('broker').get('cert').get('ca')
+ 
+ if conf.get('broker').get('cert').get('cert'):
+ self.conf['ssl_certfile'] = conf.get('broker').get('cert').get('cert')
+
+ if conf.get('broker').get('cert').get('key'):
+ self.conf['ssl_keyfile'] = conf.get('broker').get('cert').get('key')
+
+ if conf.get('broker').get('ssl_password'):
+ self.conf['ssl_password'] = conf.get('broker').get('ssl_password') 
+ 
+ 
+ # print(self.conf)
+ # self.connection()
+ # self.producer = self.producer_client()
+ # self.consumer = self.consumer_client()
+
+
+ def admin(self):
+ # print(self.conf.get('bootstrap_servers'),self.conf.get('security_protocol'))
+ # self.broker = KafkaAdminClient(
+ # **self.conf
+ # )
+ return KafkaAdminClient(
+ **self.conf
+ )
+
+ def producer(self, serializer, username, password):
+ # print( username, password)
+ 
+ self.conf["sasl_plain_username"]=username
+ self.conf["sasl_plain_password"]=password
+ self.conf["value_serializer"]=serializer
+ # conf = {
+ # 'bootstrap.servers': self.conf.get('bootstrap_servers'),
+ # 'security.protocol': self.conf.get('security_protocol'),
+ # 'sasl.mechanisms': self.conf.get('sasl_mechanism'),
+ # 'ssl.ca.location': self.conf.get('ssl_cafile'),
+ # 'sasl.username': username,
+ # 'sasl.password': password, 
+ # # any other config you like ..
+ # }
+ 
+ # print(self.conf)
+
+ return KafkaProducer(
+ **self.conf,
+ )
+
+ def consumer(self, deserializer, username, password, group, topic):
+ # print(self.conf)
+
+ self.conf["sasl_plain_username"]=username
+ self.conf["sasl_plain_password"]=password
+ self.conf["value_deserializer"]=deserializer
+ self.conf["group_id"]=group
+ self.conf["auto_offset_reset"]='earliest'
+ self.conf["enable_auto_commit"]=False
+
+
+ 
+
+ logger = logging.getLogger('consumer')
+ logger.setLevel(logging.DEBUG)
+ handler = logging.StreamHandler()
+ handler.setFormatter(logging.Formatter('%(asctime)-15s %(levelname)-8s %(message)s'))
+ logger.addHandler(handler)
+ conf = {
+ 'bootstrap.servers': self.conf.get('bootstrap_servers'),
+ 'security.protocol': self.conf.get('security_protocol'),
+ 'sasl.mechanisms': self.conf.get('sasl_mechanism'),
+ 'ssl.ca.location': self.conf.get('ssl_cafile'),
+ 'sasl.username': username,
+ 'sasl.password': password, 
+ 'session.timeout.ms': 6000,
+ 'auto.offset.reset': 'earliest', 
+ 'enable.auto.offset.store': False,
+ 'group.id': "abcd",
+ # any other config you like ..
+ }
+
+ if 'value_serializer' in list(self.conf.keys()):
+ del self.conf['value_serializer']
+
+
+ # self.conf['sasl_mechanism'] = 'plain'
+ # print(self.conf,)
+ return KafkaConsumer(topic, **self.conf)
+
+
+class Configuration(object):
+ def __init__(self, yaml_file):
+ self.config = self.read_file(yaml_file)
+
+ def read_file(self, file):
+ with open(file, "r") as stream:
+ try:
+ self.conf = yaml.safe_load(stream)
+ # print(self.conf )
+ except yaml.YAMLError as exc:
+ print("Invalid configuration file")
+
+ return
+
+
+
+class Configs(object):
+ def __init__(self,conf, broker):
+ self.broker = broker
+ self.conf = conf 
+
+ def add(self, ):
+ """
+ # Create topic owner
+ topic_username = str(attributes.get('topic-username'))
+ topic_password = str(attributes.get('topic-password'))
+ #resource = ConfigResource('Users', topic_username)
+ resource = ConfigResource(ConfigResource.Type.ANY, topic_username)
+ describe_configs = admin.describe_configs([resource])
+ describe_configs['SCRAM-SHA-256'] = f'[iterations=8192,password={topic_password}]'
+ describe_configs['SCRAM-SHA-512'] = f'[password={topic_password}]'
+ admin.alter_configs([resource])
+ # Create ACL rule
+ acl = AclBinding(ResourceType.TOPIC, topic_name, 
+ ResourcePatternType.MATCH, f'User:{topic_username}', None, 
+ AclOperation.ALL, AclPermissionType.ALLOW)
+ admin.create_acls([acl])
+ """
+ # print(self.conf)
+ for user in self.conf.get('activity').get('cname'):
+ # command = "{command} --bootstrap-servers {bootstrap_servers} --alter --add-config {password} --entity-type users --entity-name {username}".format(bootstrap_servers=self.conf.get('broker').get('server'), password=self.conf.get(''))
+ cmd = [self.conf.get('command'), "--bootstrap-server", self.conf.get('broker').get('server'), "--alter" , "--add-config", '\''+user.get('pass')+'\'', "--entity-type", "users","--entity-name '{}'\'".format(user.get('user')), "'", '--command-config', self.conf.get('config')]
+ text = colored(user.get('user'), 'green', attrs=[])
+ print()
+ print()
+ print("Creating users {user}".format(user=text))
+ print(" ".join(cmd))
+ subprocess.run(" ".join(cmd), shell=True, check=True)
+
+class Topic(object):
+ """Creates topic listed in the configuration under activity.topics property
+ arg : broker connection
+ configuration object form yaml
+ """
+ def __init__(self, conf, broker): 
+ self.broker = broker
+ self.conf = conf
+
+ def create(self):
+
+ print_msg("Creating topics")
+ print()
+ result = None
+ topics = []
+ for topic in self.conf.get('activity').get('topics'):
+ try:
+ 
+ text = colored(topic, 'red', attrs=[])
+ 
+ c_topic = NewTopic(topic.get('name'), num_partitions=topic.get('partition'), replication_factor=topic.get('replication'))
+ topics.append(c_topic)
+
+ 
+ rtopics = self.broker.create_topics([c_topic])
+ msg = "Creating topic {data}".format(data=text)
+ print_msg(msg)
+ topics.append(rtopics)
+ 
+ except TopicAlreadyExistsError:
+ text = colored(topic.get('name'), 'yellow', attrs=[])
+ print("Topic {data} Already exist".format(data=text))
+ print()
+ print()
+ return self
+
+ def update_partition(self,):
+
+ print_msg("Update partition for the topics")
+ print()
+ result = None
+ topics = {}
+ 
+ for topic in self.conf.get('activity').get('topics'):
+ try:
+ text = colored(topic, 'red', attrs=[])
+ current_partition = self.get_partitions_number(topic.get('name'))
+ # print(partitions)
+ if current_partition < topic.get('partition'):
+ topics[topic.get('name')] = NewPartitions(topic.get('partition'))
+ # rtopics = self.broker.create_topics([c_topic])
+ msg = "Partition updated from {current_partition} to {to}".format(to=topic.get('partition'), current_partition=current_partition)
+ print_msg(msg)
+ # topics.append(rtopics)
+ self.broker.create_partitions(topics)
+ topics = {}
+ else:
+ print("There is no change in partition for {topic}".format(topic=topic.get('name')))
+ except InvalidPartitionsError as e:
+ print(e.message)
+ text = colored(topic.get('name'), 'yellow', attrs=[])
+ print("Topic {data} Already exist".format(data=text))
+ print()
+ 
+ return self
+
+ def get_partitions_number(self, topic):
+ # print(topic)
+ connection = ConnectBroker(self.conf)
+ 
+ consumer = connection.consumer(lambda x: 
+ loads(x.decode('utf-8')) ,"admin", "hAHsm12ls0X", "ux" , topic)
+ partitions = consumer.partitions_for_topic(topic)
+ # print("--",len(partitions))
+ return len(partitions)
+
+
+ def delete(self):
+
+ print_msg("Creating topics")
+ print()
+ result = None
+ topics = []
+ for topic in self.conf.get('activity').get('topics'):
+ try:
+ 
+ text = colored(topic, 'red', attrs=[])
+ 
+ c_topic = NewTopic(topic.get('name'), num_partitions=topic.get('partition'), replication_factor=topic.get('replication'))
+ topics.append(c_topic)
+
+ 
+ rtopics = self.broker.delete_topics([topic.get('name')])
+ msg = "Delete topic {data}".format(data=text)
+ print_msg(msg)
+ topics.append(rtopics)
+ 
+ except TopicAlreadyExistsError:
+ text = colored(topic.get('name'), 'yellow', attrs=[])
+ print("Topic {data} Already exist".format(data=text))
+ print()
+ print()
+ return self
+
+
+ def acl(self):
+
+ print_msg("Applying ACL policies",)
+ print()
+ acls = []
+ for it in self.conf.get('activity').get('acls'):
+ # print(it)
+ for user in it.get('users'):
+ for role in user.get('perm'):
+ # print(role.get('o'), role.get('p'))
+ resource_pattern_filter_group = ResourcePatternFilter(
+ resource_type=ResourceType.TOPIC,
+ resource_name=it.get('topic'),
+ pattern_type=ACLResourcePatternType.ANY,
+ )
+
+ filter = ACLFilter(
+ principal="User:{user}".format(user=user.get('cn')),
+ host=it.get('host'),
+ operation=self.operation(role.get('o')),
+ permission_type=self.permission(role.get('p')),
+ resource_pattern=resource_pattern_filter_group
+ )
+ 
+ result, err = self.broker.describe_acls(filter)
+
+ if len(result) == 0 :
+ if it.get('group'):
+ groups = acl2 = self.broker.create_acls([ACL(
+ principal="User:{user}".format(user=user.get('cn')),
+ host=it.get('host'),
+ operation=self.operation(role.get('o')),
+ permission_type=self.permission(role.get('p')),
+ resource_pattern=ResourcePattern(ResourceType.GROUP, it.get('group'),)
+ )])
+ 
+ acls_result = self.broker.create_acls([ACL(
+ principal="User:{user}".format(user=user.get('cn')),
+ host=it.get('host'),
+ operation=self.operation(role.get('o')),
+ permission_type=self.permission(role.get('p')),
+ resource_pattern=ResourcePattern(ResourceType.TOPIC, it.get('topic'),)
+ )])
+
+ 
+ print("ACL attached for {topic} to {op} as {perm} for principal {user}".format(topic=colored(it.get('topic'), 'yellow'), op=colored(self.operation_label(role.get('p')), 'red'), perm=colored(self.permission_label(role.get('o')), 'yellow'), user=colored(user.get('cn'), 'yellow')))
+ else:
+ print("ACL exists for {topic} to {op} as {perm} for principal {user}".format(topic=colored(it.get('topic'), 'yellow'), op=colored(self.operation_label(role.get('p')), 'red'), perm=colored(self.permission_label(role.get('o')), 'yellow'), user=colored(user.get('cn'), 'yellow')))
+ 
+ print()
+ print()
+ return self
+ 
+
+ def list(self,):
+ print_msg("List topics available",)
+ print(self.broker.list_topics())
+ print()
+ return self
+ 
+
+ def fetch_acls(self):
+ print_msg("Created acls fetched from server from the system",)
+ print()
+ # connection = ConnectBroker(self.conf)
+ # admin = connection.admin()
+
+ output = []
+ for it in self.conf.get('activity').get('acls'):
+ for user in it.get('users'):
+ # print(it.get('topic'),user)
+ # producer = connection.producer(lambda x: 
+ # dumps(x).encode('utf-8'), user.get('cn'), user.get('pwd'))
+ resource_pattern_filter_group = ResourcePatternFilter(
+ resource_type=ResourceType.TOPIC,
+ resource_name=it.get('topic'),
+ pattern_type=ACLResourcePatternType.ANY,
+ )
+ # print(it)
+
+ for role in user.get('perm'):
+ 
+ # pfilter = ResourcePatternFilter(ResourceType.TOPIC, it.get('topic'), ACLResourcePatternType.LITERAL)
+ acl_filter = ACLFilter(
+ resource_pattern=resource_pattern_filter_group, #ResourcePattern(ResourceType.TOPIC, it.get('topic')),
+ operation=self.operation(role.get('o')),
+ permission_type=self.permission(role.get('p')),
+ principal="User:{user}".format(user=user.get('cn')),
+ host=it.get('host')
+ ) 
+
+ result, error = self.broker.describe_acls(acl_filter=acl_filter)
+ if len(result):
+ output.append([it.get('topic'),user.get('cn'), it.get('group'), self.operation_label(role.get('p')),self.permission_label(role.get('o')), ])
+ # self.broker.delete_acls(result)
+ # print(len(result))
+
+ print(tabulate(output, headers=[colored("Topic", "grey"), colored("User", "grey"), colored("Group", "grey"), colored("Permission", "grey"), colored("Role", "grey"),]))
+ print()
+
+ return self
+ 
+
+ def producer(self, connection, it, user, role, data_count):
+ producer = connection.producer(lambda x: 
+ dumps(x).encode('utf-8') ,user.get('cn'), user.get('pwd'))
+ print("ACL attached for {topic} to {op} as {perm} for principal {user}".format(topic=colored(it.get('topic'), 'yellow'), op=colored(self.operation_label(role.get('p')), 'red'), perm=colored(self.permission_label(role.get('o')), 'yellow'), user=colored(user.get('cn'), 'yellow')))
+ for e in range(data_count):
+ data = {'number' : e, 'user':user.get('cn'), "topic": it.get('topic')}
+ # print(user.get('cn'))
+ producer.send(it.get('topic'), value=data) 
+
+ def consumer(self, connection, it, user, role, data_count):
+ consumer = connection.consumer(lambda x: 
+ loads(x.decode('utf-8')) ,user.get('cn'), user.get('pwd'), it.get('group'), it.get('topic'))
+ print("ACL attached for {topic} to {op} as {perm} for principal {user}".format(topic=colored(it.get('topic'), 'yellow'), op=colored(self.operation_label(role.get('p')), 'red'), perm=colored(self.permission_label(role.get('o')), 'yellow'), user=colored(user.get('cn'), 'yellow')))
+ counter = 0
+ killer = Killer()
+
+ def shutdown_handler(signum, frame):
+ print("Shutting down Kafka consumer gracefully...")
+ consumer.close()
+ print("Kafka consumer has been shut down.")
+ # Exit the program after the consumer is closed
+ exit(0)
+
+
+ signal.signal(signal.SIGINT, shutdown_handler)
+ signal.signal(signal.SIGTERM, shutdown_handler)
+ print(data_count)
+
+ try:
+ for m in consumer:
+ print(m.value, counter, data_count)
+ if(counter >= data_count-1):
+ print("Stop Consumer")
+ # killer.shutdown_signal = True
+ # raise SystemExit
+ # consumer.commit()
+ consumer.close()
+ print("Exit Consumer")
+ # raise KeyboardInterrupt
+
+ break
+ counter += 1
+ except KeyboardInterrupt:
+ # Handling KeyboardInterrupt to close the consumer gracefully
+ print("Keyboard interrupt received. Shutting down...")
+ consumer.close()
+ 
+
+ except Exception as e:
+ print(f"Error occurred: {str(e)}")
+ consumer.close()
+ exit(0)
+
+ finally:
+ print("Finally", it.get('topic'))
+ # Close the consumer if it's not already closed
+ # if not consumer.closed:
+ consumer.close()
+ 
+
+ # for e in consumer:
+ # consumer.commit()
+ # print(e.value)
+ # print(counter , data_count-1)
+ # if(counter >= data_count-1):
+ # print("Stop Consumer")
+ # KafkaConsumer.close(self)
+ # counter +=1
+
+
+
+ def tests(self, data_count=5):
+ return ''
+ connection = ConnectBroker(self.conf)
+
+ producers = []
+ for it in self.conf.get('activity').get('acls'):
+ for user in it.get('users'):
+ for role in user.get('perm'):
+ # print(role.get('o'))
+ if role.get('o') == 'w':
+ producer = multiprocessing.Process(target=self.producer, args = [connection, it, user, role, data_count])
+ producer.start()
+ producers.append(producer) 
+ # producer = connection.producer(lambda x: 
+ # dumps(x).encode('utf-8') ,user.get('cn'), user.get('pwd'))
+ # print("ACL attached for {topic} to {op} as {perm} for principal {user}".format(topic=colored(it.get('topic'), 'yellow'), op=colored(self.operation_label(role.get('p')), 'red'), perm=colored(self.permission_label(role.get('o')), 'yellow'), user=colored(user.get('cn'), 'yellow')))
+ # for e in range(5):
+ # data = {'number' : e, 'user':user.get('cn'), "topic": it.get('topic')}
+ # print(user.get('cn'))
+ # producer.send(it.get('topic'), value=data)
+
+ producer = None 
+ 
+ for producer in producers:
+ producer.join()
+
+
+ consumers = []
+ for it in self.conf.get('activity').get('acls'):
+ for user in it.get('users'):
+ for role in user.get('perm'):
+ # print(role.get('o'))
+ if role.get('o') == 'r':
+ consumer = multiprocessing.Process(target=self.consumer, args = [connection, it, user, role, data_count])
+ consumer.start()
+ consumers.append(consumer)
+ # consumer = connection.consumer(lambda x: 
+ # loads(x).encode('utf-8') ,user.get('cn'), user.get('pwd'))
+ # print("ACL attached for {topic} to {op} as {perm} for principal {user}".format(topic=colored(it.get('topic'), 'yellow'), op=colored(self.operation_label(role.get('p')), 'red'), perm=colored(self.permission_label(role.get('o')), 'yellow'), user=colored(user.get('cn'), 'yellow')))
+ # for e in consumer:
+ # print(e)
+
+ for consumer in consumers:
+ consumer.join()
+
+ # print("Hello")
+ return ''
+
+
+
+ def permission_label(self, permission):
+ if permission == 'r':
+ return colored('Consumer', 'light_magenta')
+ elif permission == 'w':
+ return colored('Producer', 'light_cyan')
+ elif permission == 'a':
+ return 'Producer and Consumer'
+ elif permission == 'd':
+ return "Describe"
+
+ def operation_label(self, permission):
+ if permission == 'a':
+ return colored('allow', 'green')
+ elif permission == 'd':
+ return colored('deny', 'blue')
+ elif permission == 'b':
+ return "allow & deny"
+
+ def permission(self, operand):
+ if operand == 'a':
+ return ACLPermissionType.ALLOW
+ elif operand == 'd':
+ return ACLPermissionType.DENY
+ elif operand == 'b':
+ return ACLPermissionType.ANY
+
+
+ def operation(self, permission):
+
+ if permission == 'r':
+ return ACLOperation.READ
+ elif permission == 'w':
+ return ACLOperation.WRITE
+ elif permission == 'a':
+ return ACLOperation.ALL
+ elif permission == 'd':
+ return ACLOperation.DESCRIBE
+
+ 
+class Killer:
+ def __init__(self):
+ signal.signal(signal.SIGINT, self.exit_gracefully)
+ signal.signal(signal.SIGTERM, self.exit_gracefully)
+
+ self.shutdown_signal = False
+
+ def exit_gracefully(self, signal_no, stack_frame):
+ self.shutdown_signal = True
+ raise SystemExit
+
+
+class Test(object):
+
+ def __init__(self, conf, broker): 
+ self.broker = broker
+ self.conf = conf
+
+ def test(self, volume=1):
+ 
+ return ' '.join(['Burp!'] * volume)
+
+
+class Pipeline(object):
+
+ def __init__(self, file):
+ # print(config)
+ self.configuration = Configuration(file)
+ self.server_connection = ConnectBroker(self.configuration.conf)
+ 
+ self.topic = Topic(self.configuration.conf, self.server_connection.admin(),)
+ self.configs = Configs(self.configuration.conf, self.server_connection.admin())
+ # self.validate = Test(self.configuration.conf, self.server_connection.producer())
+ 
+ # self.server_connection = ConnectBroker(bootstrap_brokers, password, username, ssl_password, security_protocol=security_protocol, sasl_mechanism=sasl_mechanism,cert_file=cert_file, cert_key=cert_key, ca_file=ca_file )
+ # self.server_connection.connection()
+ # python acl-creator.py run --bootstrap_brokers=pop-os.localdomain:19093 --username=admin --password=hAHsm12ls0X --cert-file=/home/performvu/workspace/docker-compose/kafka-cluster/kcerts/ca-cert.pem --cert-key=/home/performvu/workspace/docker-compose/kafka-cluster/kcerts/truststore/ca-key --security-protocol='SASL_SSL' --sasl-mechanism='SCRAM-SHA-512' --ssl-password='hello.world' --ca-file /home/performvu/workspace/docker-compose/kafka-cluster/kcerts/ca-cert
+
+ 
+
+if __name__ == '__main__':
+ fire.Fire(Pipeline)
